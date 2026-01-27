@@ -1,0 +1,106 @@
+name: build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller --windowed --name "Drunken-Bishop-Painter" \
+            --icon assets/icon.png \
+            --add-data "assets/icon.png:assets" \
+            painter.py
+          mkdir -p package/Drunken-Bishop-Painter
+          cp -r dist/Drunken-Bishop-Painter/* package/Drunken-Bishop-Painter/
+          cp assets/icon.png package/Drunken-Bishop-Painter/icon.png
+          python - <<'PY'
+          from pathlib import Path
+          content = """[Desktop Entry]
+          Type=Application
+          Name=Drunken Bishop, Painter
+          Exec=./Drunken-Bishop-Painter
+          Icon=icon.png
+          Terminal=false
+          Categories=Graphics;Utility;
+          Path=.
+          """
+          Path("package/Drunken-Bishop-Painter/Drunken-Bishop-Painter.desktop").write_text(
+              "\n".join(line.strip() for line in content.strip().splitlines()) + "\n"
+          )
+          PY
+          (cd package && zip -r ../Drunken-Bishop-Painter-linux.zip Drunken-Bishop-Painter)
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --windowed --name "Drunken-Bishop-Painter" \
+            --icon assets/icon.icns \
+            --add-data "assets/icon.png:assets" \
+            painter.py
+          if [ -d "dist/Drunken-Bishop-Painter.app" ]; then
+            (cd dist && zip -r ../Drunken-Bishop-Painter-macos.zip "Drunken-Bishop-Painter.app")
+          else
+            (cd dist && zip -r ../Drunken-Bishop-Painter-macos.zip "Drunken-Bishop-Painter")
+          fi
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          pyinstaller --windowed --name "Drunken-Bishop-Painter" `
+            --icon assets\icon.ico `
+            --add-data "assets\icon.png;assets" `
+            painter.py
+          powershell -Command "Compress-Archive -Path dist\Drunken-Bishop-Painter\* -DestinationPath Drunken-Bishop-Painter-windows.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Drunken-Bishop-Painter-${{ matrix.os }}
+          path: |
+            Drunken-Bishop-Painter-linux.zip
+            Drunken-Bishop-Painter-macos.zip
+            Drunken-Bishop-Painter-windows.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/Drunken-Bishop-Painter-linux.zip
+            artifacts/**/Drunken-Bishop-Painter-macos.zip
+            artifacts/**/Drunken-Bishop-Painter-windows.zip
