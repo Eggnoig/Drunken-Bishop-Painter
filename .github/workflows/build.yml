@@ -31,9 +31,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          python -m pip install pyside6 pyinstaller
+          python -m pip install pyside6 pyinstaller pillow
 
-      # ---------- WINDOWS ----------
+      #WINDOWS
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -48,7 +48,7 @@ jobs:
 
           Compress-Archive -Path "dist/$env:APP_NAME.exe" -DestinationPath "$env:APP_NAME-windows.zip"
 
-      # ---------- macOS ----------
+      #macOS
       - name: Build (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -62,7 +62,7 @@ jobs:
 
           ditto -c -k --sequesterRsrc --keepParent "dist/$APP_NAME.app" "$APP_NAME-macos.zip"
 
-      # ---------- LINUX ----------
+      #LINUX
       - name: Build (Linux)
         if: runner.os == 'Linux'
         shell: bash
