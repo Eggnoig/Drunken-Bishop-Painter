@@ -6,7 +6,7 @@ import base64
 import hashlib
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox,
@@ -96,6 +96,34 @@ def build_grid(data: bytes, width: int, height: int):
 
     ex, ey = x, y
     return grid, (sx, sy), (ex, ey)
+
+def walk_positions(data: bytes, width: int, height: int):
+    if width < 5 or height < 5:
+        raise ValueError("Board must be at least 5x5.")
+
+    x = width // 2
+    y = height // 2
+    sx, sy = x, y
+
+    def step(dir2: int):
+        nonlocal x, y
+        if dir2 == 0:
+            x -= 1; y -= 1
+        elif dir2 == 1:
+            x += 1; y -= 1
+        elif dir2 == 2:
+            x -= 1; y += 1
+        else:
+            x += 1; y += 1
+        x = clamp(x, 0, width - 1)
+        y = clamp(y, 0, height - 1)
+        return x, y
+
+    for b in data:
+        for shift in (0, 2, 4, 6):
+            yield step((b >> shift) & 0b11)
+
+    return (sx, sy), (x, y)
 
 def count_to_char(count: int) -> str:
     # Map visit count into the density ramp.
@@ -231,6 +259,14 @@ class MainWindow(QMainWindow):
         self.auto = QCheckBox("Auto-update")
         self.auto.setChecked(True)
 
+        self.walk = QCheckBox("Show walk")
+        self.walk.setChecked(False)
+
+        self.walk_time = QSpinBox()
+        self.walk_time.setRange(0, 2000)
+        self.walk_time.setValue(30)
+        self.walk_time.setSuffix(" ms/step")
+
         self.btn = QPushButton("Generate")
         self.btn.clicked.connect(self.generate)
 
@@ -264,6 +300,9 @@ class MainWindow(QMainWindow):
 
         form.addWidget(self.btn,            3, 0)
         form.addWidget(self.auto,           3, 1, 1, 2)
+        form.addWidget(self.walk,           3, 3, 1, 2)
+        form.addWidget(QLabel("Walk time:"), 3, 5)
+        form.addWidget(self.walk_time,      3, 6, 1, 2)
 
         # Info
         self.info = QLabel("")
@@ -299,8 +338,24 @@ class MainWindow(QMainWindow):
             w.valueChanged.connect(self._maybe_autogen)
 
         self.auto.stateChanged.connect(self._maybe_autogen)
+        self.walk.stateChanged.connect(self._maybe_autogen)
+        self.walk_time.valueChanged.connect(self._maybe_autogen)
+
+        self._walk_timer = None
+        self._walk_steps = []
+        self._walk_index = 0
+        self._walk_grid = None
+        self._walk_start = None
+        self._walk_pos = None
+        self._walk_fmt_map = None
 
         self.generate()
+
+    def _stop_walk(self):
+        if self._walk_timer is not None:
+            self._walk_timer.stop()
+            self._walk_timer.deleteLater()
+            self._walk_timer = None
 
     def _maybe_autogen(self, *_):
         # Skip churn if auto-update is off.
@@ -308,6 +363,7 @@ class MainWindow(QMainWindow):
             self.generate()
 
     def generate(self):
+        self._stop_walk()
         try:
             # Pull current UI state.
             text = self.input_text.text()
@@ -323,13 +379,11 @@ class MainWindow(QMainWindow):
             iterations = int(self.iterations.value())
             width = int(self.width.value())
             height = int(self.height.value())
+            walk_enabled = self.walk.isChecked()
 
             # Turn input into bytes, then into a walkable buffer.
             raw = bytes_from_string(text, encoding)
             data = derive_bytes(raw, mode, hash_name, salt, iterations)
-
-            grid, start_pos, end_pos = build_grid(data, width, height)
-            lines = ascii_box_lines(grid, start_pos, end_pos)
 
             self.info.setText(
                 f"Input {len(text)} chars | raw {len(raw)} bytes | "
@@ -337,28 +391,65 @@ class MainWindow(QMainWindow):
                 f"{summarize_bytes(data)}"
             )
 
-            # Plain
-            self.plain.setPlainText("\n".join(lines))
+            if walk_enabled:
+                steps = list(walk_positions(data, width, height))
+                grid = [[0] * width for _ in range(height)]
+                start_pos = (width // 2, height // 2)
+                self._walk_steps = steps
+                self._walk_index = 0
+                self._walk_grid = grid
+                self._walk_start = start_pos
+                self._walk_pos = start_pos
+                symbols = set(RAMP) | {"S", "E", "|", "-", "+"}
+                self._walk_fmt_map = {s: format_for_symbol(s, scheme) for s in symbols}
+                self._render_walk()
 
-            # Colored: insert character-by-character with formatting
-            self.colored.clear()
-            cursor = self.colored.textCursor()
-            cursor.movePosition(QTextCursor.Start)
-
-            # Build formats for all symbols we might use
-            symbols = set(RAMP) | {"S", "E", "|", "-", "+"}
-            fmt_map = {s: format_for_symbol(s, scheme) for s in symbols}
-
-            for line in lines:
-                for ch in line:
-                    cursor.insertText(ch, fmt_map.get(ch, fmt_map[" "]))
-                cursor.insertText("\n")
+                interval = int(self.walk_time.value())
+                self._walk_timer = QTimer(self)
+                self._walk_timer.timeout.connect(self._advance_walk)
+                self._walk_timer.start(interval)
+            else:
+                grid, start_pos, end_pos = build_grid(data, width, height)
+                self._render_grid(grid, start_pos, end_pos, scheme)
 
         except Exception as e:
             messagebox = f"{type(e).__name__}: {e}"
             # Use a Qt-friendly message box
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", messagebox)
+
+    def _advance_walk(self):
+        if self._walk_index >= len(self._walk_steps):
+            self._stop_walk()
+            return
+
+        x, y = self._walk_steps[self._walk_index]
+        self._walk_grid[y][x] += 1
+        self._walk_pos = (x, y)
+        self._walk_index += 1
+        self._render_walk()
+
+    def _render_walk(self):
+        self._render_grid(self._walk_grid, self._walk_start, self._walk_pos, None)
+
+    def _render_grid(self, grid, start_pos, end_pos, scheme):
+        lines = ascii_box_lines(grid, start_pos, end_pos)
+        self.plain.setPlainText("\n".join(lines))
+
+        self.colored.clear()
+        cursor = self.colored.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+
+        if scheme is not None:
+            symbols = set(RAMP) | {"S", "E", "|", "-", "+"}
+            fmt_map = {s: format_for_symbol(s, scheme) for s in symbols}
+        else:
+            fmt_map = self._walk_fmt_map
+
+        for line in lines:
+            for ch in line:
+                cursor.insertText(ch, fmt_map.get(ch, fmt_map[" "]))
+            cursor.insertText("\n")
 
 def main():
     # Standard Qt app setup.
