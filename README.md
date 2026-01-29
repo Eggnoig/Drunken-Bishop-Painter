@@ -1,5 +1,12 @@
 # Drunken-Bishop-Painter
-Desktop app that generates "drunken bishop" ASCII art from text input, with multiple hashing/encoding options. There are currently releases for Windows, Linux, and macOS. These releases are not signed as of right now, but they running the script on its own will function just as well, you just don't need to set up a virtual enviroment if you use the release. 
+Have you ever generated SSH keys and noticed a randomart that they show you? 
+Did you know a drunken bishop stumbled around and made it? Well not actually. 
+
+The Drunken Bishop algorithm is a visual representation of that hash of the SSH key that you made. It's used to make an easier comparsion of the hash so you don't struggle so compare the strings yourself. It works off the idea that humans have an easier time spotting difference in pictures then in lines of text. 
+
+For more information on the Drunken Bishop Alogrithm and some of the math behind it, check out this paper [The drunken bishop: An analysis of the OpenSSH fingerprint visualization algorithm](https://www.dirk-loss.de/sshvis/drunken_bishop.pdf)
+
+This is a desktop app that generates "drunken bishop" ASCII art from text input, with multiple hashing/encoding options. There are currently releases for Windows, Linux, and macOS. These releases are not signed as of right now, but they running the script on its own will function just as well, you just don't need to set up a virtual enviroment if you use the release. 
 
 **Current Release**: v0.2.0
 
