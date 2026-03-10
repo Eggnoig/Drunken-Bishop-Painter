@@ -22,7 +22,7 @@ def clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 def bytes_from_string(text: str, encoding: str) -> bytes:
-    # Replace invalid characters instead of raising, keeps UI forgiving.
+    # Replace invalid characters instead of raising, since the user may be experimenting with encodings.
     return text.encode(encoding, errors="replace")
 
 def derive_bytes(data: bytes, mode: str, hash_name: str, salt: bytes, iterations: int) -> bytes:
@@ -63,7 +63,23 @@ def derive_bytes(data: bytes, mode: str, hash_name: str, salt: bytes, iterations
             out = h.digest()
         return out
 
-def build_grid(data: bytes, width: int, height: int):
+def iter_walk_chunks(data: bytes, step_multiplier: int):
+    # Extend walk length while keeping deterministic output.
+    if step_multiplier < 1:
+        raise ValueError("Step multiplier must be at least 1.")
+    if not data:
+        return
+
+    current = data
+    for i in range(step_multiplier):
+        if i == 0:
+            yield current
+            continue
+        # Keep each extra chunk the same size so steps scale linearly.
+        current = hashlib.shake_256(current).digest(len(data))
+        yield current
+
+def build_grid(data: bytes, width: int, height: int, step_multiplier: int = 1):
     if width < 5 or height < 5:
         raise ValueError("Board must be at least 5x5.")
 
@@ -90,14 +106,15 @@ def build_grid(data: bytes, width: int, height: int):
         y = clamp(y, 0, height - 1)
         grid[y][x] += 1
 
-    for b in data:
-        for shift in (0, 2, 4, 6):
-            step((b >> shift) & 0b11)
+    for chunk in iter_walk_chunks(data, step_multiplier):
+        for b in chunk:
+            for shift in (0, 2, 4, 6):
+                step((b >> shift) & 0b11)
 
     ex, ey = x, y
     return grid, (sx, sy), (ex, ey)
 
-def walk_positions(data: bytes, width: int, height: int):
+def walk_positions(data: bytes, width: int, height: int, step_multiplier: int = 1):
     if width < 5 or height < 5:
         raise ValueError("Board must be at least 5x5.")
 
@@ -119,9 +136,10 @@ def walk_positions(data: bytes, width: int, height: int):
         y = clamp(y, 0, height - 1)
         return x, y
 
-    for b in data:
-        for shift in (0, 2, 4, 6):
-            yield step((b >> shift) & 0b11)
+    for chunk in iter_walk_chunks(data, step_multiplier):
+        for b in chunk:
+            for shift in (0, 2, 4, 6):
+                yield step((b >> shift) & 0b11)
 
     return (sx, sy), (x, y)
 
@@ -256,6 +274,11 @@ class MainWindow(QMainWindow):
         self.height.setRange(5, 61)
         self.height.setValue(9)
 
+        self.step_multiplier = QSpinBox()
+        self.step_multiplier.setRange(1, 200)
+        self.step_multiplier.setValue(1)
+        self.step_multiplier.setPrefix("x")
+
         self.auto = QCheckBox("Auto-update")
         self.auto.setChecked(True)
 
@@ -266,6 +289,9 @@ class MainWindow(QMainWindow):
         self.walk_time.setRange(0, 2000)
         self.walk_time.setValue(30)
         self.walk_time.setSuffix(" ms/step")
+        spin_w = max(self.walk_time.sizeHint().width(), self.step_multiplier.sizeHint().width())
+        self.walk_time.setFixedWidth(spin_w)
+        self.step_multiplier.setFixedWidth(spin_w)
 
         self.btn = QPushButton("Generate")
         self.btn.clicked.connect(self.generate)
@@ -298,11 +324,13 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("Board H:"),  2, 6)
         form.addWidget(self.height,         2, 7)
 
-        form.addWidget(self.btn,            3, 0)
-        form.addWidget(self.auto,           3, 1, 1, 2)
-        form.addWidget(self.walk,           3, 3, 1, 2)
-        form.addWidget(QLabel("Walk time:"), 3, 5)
-        form.addWidget(self.walk_time,      3, 6, 1, 2)
+        form.addWidget(self.btn,            4, 0)
+        form.addWidget(self.auto,           4, 1, 1, 2)
+        form.addWidget(self.walk,           4, 3, 1, 2)
+        form.addWidget(QLabel("Walk time:"), 4, 4)
+        form.addWidget(self.walk_time,      4, 5)
+        form.addWidget(QLabel("Steps Multi.:"), 4, 6)
+        form.addWidget(self.step_multiplier, 4, 7)
 
         # Info
         self.info = QLabel("")
@@ -334,7 +362,7 @@ class MainWindow(QMainWindow):
         for w in (self.encoding, self.mode, self.hash_name, self.scheme):
             w.currentIndexChanged.connect(self._maybe_autogen)
 
-        for w in (self.iterations, self.width, self.height):
+        for w in (self.iterations, self.width, self.height, self.step_multiplier):
             w.valueChanged.connect(self._maybe_autogen)
 
         self.auto.stateChanged.connect(self._maybe_autogen)
@@ -379,6 +407,7 @@ class MainWindow(QMainWindow):
             iterations = int(self.iterations.value())
             width = int(self.width.value())
             height = int(self.height.value())
+            step_multiplier = int(self.step_multiplier.value())
             walk_enabled = self.walk.isChecked()
 
             # Turn input into bytes, then into a walkable buffer.
@@ -388,11 +417,12 @@ class MainWindow(QMainWindow):
             self.info.setText(
                 f"Input {len(text)} chars | raw {len(raw)} bytes | "
                 f"mode={mode} hash={hash_name} salt={len(salt)} iter={iterations} | "
+                f"steps={len(data) * 4 * step_multiplier} (x{step_multiplier}) | "
                 f"{summarize_bytes(data)}"
             )
 
             if walk_enabled:
-                steps = list(walk_positions(data, width, height))
+                steps = list(walk_positions(data, width, height, step_multiplier))
                 grid = [[0] * width for _ in range(height)]
                 start_pos = (width // 2, height // 2)
                 self._walk_steps = steps
@@ -409,7 +439,7 @@ class MainWindow(QMainWindow):
                 self._walk_timer.timeout.connect(self._advance_walk)
                 self._walk_timer.start(interval)
             else:
-                grid, start_pos, end_pos = build_grid(data, width, height)
+                grid, start_pos, end_pos = build_grid(data, width, height, step_multiplier)
                 self._render_grid(grid, start_pos, end_pos, scheme)
 
         except Exception as e:

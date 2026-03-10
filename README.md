@@ -51,6 +51,7 @@ python painter.py
 | Iterations | Number of hash rounds (1 = no strengthening). |
 | Board W | Width of the walk grid. |
 | Board H | Height of the walk grid. |
+| Step multiplier | Repeats/extends the walk deterministically (`xN`) to increase total steps and fill larger boards. |
 | Auto-update | Regenerates output when inputs change. |
 | Show walk | Animates the bishop path step-by-step. |
 | Walk time | Delay between steps in milliseconds. |
