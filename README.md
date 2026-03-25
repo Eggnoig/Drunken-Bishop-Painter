@@ -8,7 +8,7 @@ For more information on the Drunken Bishop Alogrithm and some of the math behind
 
 This is a desktop app that generates "drunken bishop" ASCII art from text input, with multiple hashing/encoding options. There are currently releases for Windows, Linux, and macOS. These releases are not signed as of right now, but they running the script on its own will function just as well, you just don't need to set up a virtual enviroment if you use the release. 
 
-**Current Release**: v0.2.0
+**Current Release**: v0.3.0
 
 ## Features
 - Text -> bytes -> bishop walk rendering with start/end markers
